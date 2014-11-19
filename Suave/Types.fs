@@ -117,9 +117,11 @@ module HttpRequest =
     ; ipaddr           = ip_addr } //connection.ipaddr }
 
 open Suave.Utils
-///// Gets the query from the HttpRequest
+
+/// Gets the query from the HttpRequest
 let query (x : HttpRequest) = Parsing.parse_data x.raw_query |> List.ofArray
-///// Gets the form from the HttpRequest
+
+/// Gets the form from the HttpRequest
 let form  (x : HttpRequest) = Parsing.parse_data (ASCII.to_string' x.raw_form) |> List.ofArray
 
 type ITlsProvider =
