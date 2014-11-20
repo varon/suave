@@ -674,7 +674,6 @@ module Http =
                   :: ("Access-Control-Allow-Origin", "*")
                   :: []
                 content = SocketTask (hand_shake' f)
-                //chunked = false
             }
       }
       |> succeed

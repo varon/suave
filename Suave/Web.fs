@@ -490,7 +490,7 @@ let default_error_handler (ex : Exception) msg (ctx : HttpContext) =
   else 
     Response.response Codes.HTTP_500 (UTF8.bytes (Codes.http_message Codes.HTTP_500)) ctx
 
-/// Returns the webserver as a tuple of 1) an async computation the yields unit when
+/// Returns the webserver as a tuple of 1) an async computation that yields unit when
 /// the web server is ready to serve quests, and 2) an async computation that yields
 /// when the web server is being shut down and is being terminated. The async values
 /// returned are not 'hot' in the sense that they have started running, so you must manually
