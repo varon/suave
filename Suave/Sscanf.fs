@@ -8,7 +8,7 @@ open Microsoft.FSharp.Reflection
 /// Verify that f x, and then return x, otherwise fail witha 'format failure' message
 let private check f x = if f x then x else failwithf "format failure \"%s\"" x
 
-let private parse_decimal x = Decimal.Parse(x, System.Globalization.CultureInfo.InvariantCulture)
+let private parse_decimal x = Decimal.Parse(x, Culture.invariant)
 
 /// The supported characters for the formatter
 let parsers =
@@ -34,7 +34,7 @@ let parsers =
 // array of all possible formatters, i.e. [|"%b"; "%d"; ...|]
 let separators =
   parsers.Keys
-  |> Seq.map (fun c -> "%" + c.ToString())
+  |> Seq.map (fun c -> "%" + Char.to_s c)
   |> Seq.toArray
 
 // Creates a list of formatter characters from a format string,

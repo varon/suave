@@ -68,30 +68,51 @@ module Http =
     open System
     open System.IO
 
-    let response status_code (cnt : byte []) =
+    let response status_code (cnt : byte []) headers =
       fun (ctx : HttpContext) ->
-        let response = 
-          { ctx.response with status = status_code; content = Bytes cnt }
-        { ctx with response = response } |> succeed
+        { ctx with
+            response =
+              { ctx.response with
+                  status  = status_code
+                  content = Bytes cnt
+                  headers = headers
+              }
+        }
+        |> succeed
+
+    let response' status_code (cnt : byte []) =
+      fun (ctx : HttpContext) ->
+        { ctx with
+            response =
+              { ctx.response with
+                  status  = status_code
+                  content = Bytes cnt
+              }
+        }
+        |> succeed
 
   module Writers =
 
     open System
 
     let set_header key value (ctx : HttpContext) =
-      let new_response =
-        { ctx.response with headers = (key,value) :: ctx.response.headers }
-      { ctx with response = new_response } |> succeed
+      { ctx with
+          response =
+            { ctx.response with
+                headers = (key, value) :: ctx.response.headers
+            }
+      }
+      |> succeed
 
     let private cookie_to_string (x : HttpCookie) =
-      let attributes = new System.Collections.Generic.List<string>()
-      attributes.Add(String.Format("{0}={1}", x.name ,x.value))
-      match x.domain  with | Some n -> attributes.Add(String.Format("Domain={0}", n))  | _ -> ()
-      match x.path    with | Some n -> attributes.Add(String.Format("Path={0}", n))    | _ -> ()
-      match x.expires with | Some n -> attributes.Add(String.Format("Expires={0}", n.ToString("R"))) | _ -> ()
-      if x.http_only then attributes.Add(String.Format("HttpOnly"))
-      if x.secure    then attributes.Add(String.Format("Secure"))
-      String.concat "; " attributes
+      String.concat "; "
+        [ yield String.Format("{0}={1}", x.name ,x.value)
+          match x.domain  with | Some n -> yield String.Format("Domain={0}", n)                | _ -> ()
+          match x.path    with | Some n -> yield String.Format("Path={0}", n)                  | _ -> ()
+          match x.expires with | Some n -> yield String.Format("Expires={0}", n.ToString("R")) | _ -> ()
+          if x.http_only then yield String.Format("HttpOnly")
+          if x.secure    then yield String.Format("Secure")
+        ]
 
     let set_cookie (cookie : HttpCookie) =
       set_header "Set-Cookie" (cookie_to_string cookie)
@@ -99,7 +120,8 @@ module Http =
     // TODO: I'm not sure about having MIME types in the Writers module
     let mk_mime_type a b =
       { name = a
-      ; compression = b } |> Some
+      ; compression = b }
+      |> Some
 
     let default_mime_types_map = function
       | ".bmp" -> mk_mime_type "image/bmp" false
@@ -108,8 +130,8 @@ module Http =
       | ".png" -> mk_mime_type "image/png" false
       | ".svg" -> mk_mime_type "image/svg+xml" false
       | ".ico" -> mk_mime_type "image/x-icon" false
-      | ".htm"
-      | ".html" -> mk_mime_type "text/html" true
+      | ".html"
+      | ".htm" -> mk_mime_type "text/html" true
       | ".jpe"
       | ".jpeg"
       | ".jpg" -> mk_mime_type "image/jpeg" false
@@ -137,21 +159,19 @@ module Http =
     open Response
     open Types.Codes
 
-    let ok s : WebPart = 
-      fun ctx -> { ctx with response = { ctx.response with status = HTTP_200; content = Bytes s }} |> succeed
+    let ok s : WebPart = response' HTTP_200 s
 
     let OK a = ok (UTF8.bytes a)
 
-    let created s = response HTTP_201 s
+    let created s = response' HTTP_201 s
 
     let CREATED s = created (UTF8.bytes s)
 
-    let accepted s = response HTTP_202 s
+    let accepted s = response' HTTP_202 s
 
     let ACCEPTED s = accepted (UTF8.bytes s)
 
-    let no_content : WebPart =
-      fun ctx -> { ctx with response = { status = HTTP_204; headers = ctx.response.headers; content = Bytes [||] }} |> succeed
+    let no_content : WebPart = response' HTTP_204 [||]
 
     let NO_CONTENT = no_content
 
@@ -164,20 +184,20 @@ module Http =
 
     let moved_permanently location =
       set_header "Location" location
-      >>= response HTTP_301 [||]
+      >>= response' HTTP_301 [||]
 
     let MOVED_PERMANENTLY location = moved_permanently location
 
     let found location =
       set_header "Location" location
-      >>= response HTTP_302 [||]
+      >>= response' HTTP_302 [||]
 
     let FOUND location = found location
 
     let redirect url =
       set_header "Location" url
       >>= set_header "Content-Type" "text/html; charset=utf-8"
-      >>= response HTTP_302 (
+      >>= response' HTTP_302 (
         UTF8.bytes(sprintf "<html>
     <body>
       <a href=\"%s\">%s</a>
@@ -187,7 +207,7 @@ module Http =
      
 
     let not_modified : WebPart =
-      fun ctx -> { ctx with response = {status = HTTP_304; headers = []; content = Bytes [||] }} |> succeed
+      response HTTP_304 [||] []
 
     let NOT_MODIFIED : WebPart =
       not_modified
@@ -199,61 +219,61 @@ module Http =
     open Writers
     open Types.Codes
 
-    let bad_request s = response HTTP_400 s
+    let bad_request s = response' HTTP_400 s
 
     let BAD_REQUEST s = bad_request (UTF8.bytes s)
 
     /// 401: see http://stackoverflow.com/questions/3297048/403-forbidden-vs-401-unauthorized-http-responses/12675357
     let unauthorized s =
       set_header "WWW-Authenticate" "Basic realm=\"protected\""
-      >>= response HTTP_401 s
+      >>= response' HTTP_401 s
 
     let UNAUTHORIZED s = unauthorized (UTF8.bytes s)
 
     let challenge = UNAUTHORIZED (http_message HTTP_401)
 
-    let forbidden s = response HTTP_403 s
+    let forbidden s = response' HTTP_403 s
 
     let FORBIDDEN s = forbidden (UTF8.bytes s)
 
-    let not_found s = response HTTP_404 s
+    let not_found s = response' HTTP_404 s
 
     let NOT_FOUND message = not_found (UTF8.bytes message)
 
-    let method_not_allowed s = response HTTP_405 s
+    let method_not_allowed s = response' HTTP_405 s
 
     let METHOD_NOT_ALLOWED s = method_not_allowed (UTF8.bytes s)
 
-    let not_acceptable s = response HTTP_406 s
+    let not_acceptable s = response' HTTP_406 s
 
     let NOT_ACCEPTABLE message = not_acceptable (UTF8.bytes message)
 
-    let request_timeout = response HTTP_408 [||]
+    let request_timeout = response' HTTP_408 [||]
 
     // all-caps req.timeout elided intentionally, as nothing can be passed to
     // a writing client
 
-    let conflict s = response HTTP_409 s
+    let conflict s = response' HTTP_409 s
 
     let CONFLICT message = conflict (UTF8.bytes message)
 
-    let gone s = response HTTP_410 s
+    let gone s = response' HTTP_410 s
 
     let GONE s = gone (UTF8.bytes s)
 
-    let unsupported_media_type s = response HTTP_415 s
+    let unsupported_media_type s = response' HTTP_415 s
 
     let UNSUPPORTED_MEDIA_TYPE s = unsupported_media_type (UTF8.bytes s)
 
-    let unprocessable_entity s = response HTTP_422 s
+    let unprocessable_entity s = response' HTTP_422 s
 
     let UNPROCESSABLE_ENTITY s = unprocessable_entity (UTF8.bytes s)
 
-    let precondition_required body = response HTTP_428 body
+    let precondition_required body = response' HTTP_428 body
 
     let PRECONDITION_REQUIRED body = precondition_required (UTF8.bytes body)
 
-    let too_many_requests s = response HTTP_429 s
+    let too_many_requests s = response' HTTP_429 s
 
     let TOO_MANY_REQUESTS s = too_many_requests (UTF8.bytes s)
 
@@ -262,27 +282,27 @@ module Http =
     open Response
     open Types.Codes
 
-    let internal_error arr = response HTTP_500 arr
+    let internal_error arr = response' HTTP_500 arr
 
     let INTERNAL_ERROR message = internal_error (UTF8.bytes message)
 
-    let not_implemented arr = response HTTP_501 arr
+    let not_implemented arr = response' HTTP_501 arr
 
     let NOT_IMPLEMENTED message = not_implemented (UTF8.bytes message)
 
-    let bad_gateway arr = response HTTP_502 arr
+    let bad_gateway arr = response' HTTP_502 arr
 
     let BAD_GATEWAY message = bad_gateway (UTF8.bytes message)
 
-    let service_unavailable arr = response HTTP_503 arr
+    let service_unavailable arr = response' HTTP_503 arr
 
     let SERVICE_UNAVAILABLE message = service_unavailable (UTF8.bytes message)
 
-    let gateway_timeout arr = response HTTP_504 arr
+    let gateway_timeout arr = response' HTTP_504 arr
 
     let GATEWAY_TIMEOUT message = gateway_timeout (UTF8.bytes message)
 
-    let invalid_http_version arr = response HTTP_505 arr
+    let invalid_http_version arr = response' HTTP_505 arr
 
     let INVALID_HTTP_VERSION = invalid_http_version (UTF8.bytes (http_message HTTP_505))
 
@@ -293,7 +313,13 @@ module Http =
 
     open Types.Methods
 
-    let url s (x : HttpContext) = async { if s = x.request.url then return Some x else return None }
+    let url s (x : HttpContext) =
+      async {
+        if s = x.request.url then
+          return Some x
+        else
+          return None
+      }
 
     let ``method`` (s : HttpMethod) (x : HttpContext) = async {
       if s.ToString() = x.request.``method`` then return Some x else return None
@@ -385,7 +411,7 @@ module Http =
           return! Async.WithTimeout (time_span, web_part ctx)
         with
           | :? TimeoutException ->
-            return! Response.response Codes.HTTP_408 (UTF8.bytes "Request Timeout") ctx
+            return! Response.response' Codes.HTTP_408 (UTF8.bytes "Request Timeout") ctx
             }
 
   module ServeResource =
@@ -575,7 +601,9 @@ module Http =
           response =
             { ctx.response with
                 status = HTTP_200
-                content = SocketTask (write_resource resource_name) }}
+                content = SocketTask (write_resource resource_name)
+            }
+      }
       |> succeed
 
     let send_resource' resource_name compression =

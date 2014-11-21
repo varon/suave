@@ -77,8 +77,11 @@ module Http =
     /// Respond with a given status code, http message, content in the body to a http request.
     // val response_f : status_code:HttpCode -> ( Connection -> SocketOp<unit>) -> request:HttpContext -> (Connection -> SocketOp<unit>)
 
-    /// Respond with a given status code, http reason phrase, content in the body to a http request.
-    val response : status_code:HttpCode -> content:byte [] -> WebPart
+    /// Respond with a given status code/http reason phrase, content in the body and headers, to a http request.
+    val response : status_code:HttpCode -> content:byte [] -> headers:(string * string) list -> WebPart
+
+    /// Respond with a given status code/http reason phrase and content in the body, to a http request.
+    val response' : status_code:HttpCode -> content:byte [] -> WebPart
 
   /// Module that allows changing the output response in different ways.
   /// Functions have signature f :: params... -> HttpContext -> HttpContext.

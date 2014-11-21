@@ -49,13 +49,13 @@ module HttpCookie =
   ///
   let mk' name value =
     { name      = name
-      value     = value
-      expires   = (Globals.utc_now ()).AddDays 5. |> Some
-      path      = Some "/"
-      domain    = None
-      secure    = false
-      http_only = true
-      version   = None }
+    ; value     = value
+    ; expires   = (Globals.utc_now ()).AddDays 5. |> Some
+    ; path      = Some "/"
+    ; domain    = None
+    ; secure    = false
+    ; http_only = true
+    ; version   = None }
 
   /// An empty cookie value
   let empty = mk' "" ""
@@ -332,25 +332,39 @@ open Codes
 /// send the response. Have a look at the docs for HttpContent for further
 /// details on what is possible.
 type HttpResult =
-  { status  : HttpCode
-  ; headers : (string * string) list
-  ; content : HttpContent }
+  { status       : HttpCode
+  ; headers      : (string * string) list
+  ; content      : HttpContent
+  /// A callback that lets the WebPart decide what sort of control it wants the
+  /// server to have, and optionally letting the WebPart perform additional
+  /// checks; beware though, as crashing in this function can kill the server.
+  ; before_write : Connection -> SocketOp<ResponseFlow> }
+
+and ResponseFlow =
+  /// This non-standard response flow control means that it's completely up to
+  /// the WebPart to decide when and how to write the required HTTP prelude
+  /// (that is: 'HTTP/1.1 ...' etc
+  | FlowNonStandard
+  /// The default value which is to let Suave write the HTTP prelude.
+  | FlowStandard
 
 /// A small module that helps you create a HttpResults.
 [<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
 module HttpResult =
   /// The empty HttpResult, with a 404 and a HttpContent.NullContent content
   let empty =
-    { status  = HTTP_404
-    ; headers = []
-    ; content = HttpContent.NullContent }
+    { status       = HTTP_404
+    ; headers      = []
+    ; content      = HttpContent.NullContent
+    ; before_write = fun conn -> async.Return (Choice1Of2 FlowStandard) }
 
   /// Create a new HttpResult from the status, headers and content.
-  let create status headers content =
-    { status  = status
-    ; headers = headers
-    ; content = content }
-
+  let create status headers content before_write =
+    { status       = status
+    ; headers      = headers
+    ; content      = content
+    ; before_write = before_write }
+    
 /// A SuaveTask is an Async{'a option} which shows that it may need to be
 /// evaluated asynchronously to decide whether a value is available.
 type SuaveTask<'a> = Async<'a option>
@@ -444,10 +458,7 @@ module HttpContext =
     { request    = request
     ; user_state = Map.empty
     ; runtime    = runtime
-    ; response   = { status = HTTP_404
-                   ; headers = []
-                   ; content = NullContent } }
-
+    ; response   = HttpResult.empty }
 
 let request f (a : HttpContext) = f a.request a
 let context f (a : HttpContext) = f a a

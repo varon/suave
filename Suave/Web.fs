@@ -259,7 +259,7 @@ module ParsingAndControl =
 
   /// Process the request, reading as it goes from the incoming 'stream', yielding a HttpRequest
   /// when done
-  let process_request proxy_mode is_secure (bytes : BufferSegment list) connection : SocketOp<(HttpRequest * BufferSegment list) option> = socket {
+  let process_request is_secure (bytes : BufferSegment list) connection : SocketOp<(HttpRequest * BufferSegment list) option> = socket {
 
     let line_buffer = connection.line_buffer
 
@@ -272,32 +272,28 @@ module ParsingAndControl =
       HttpRequest.mk http_version url meth headers raw_query
         (parse_trace_headers headers) is_secure connection.ipaddr
 
-    // won't continue parsing if on proxyMode with the intention of forwarding the stream as it is
-    // TODO: proxy mode might need headers and contents of request, but won't get it through this impl
-    if proxy_mode then return Some (request, rem)
+    if meth.Equals("POST") || meth.Equals("PUT") then
+
+      let content_encoding = request.headers %% "content-type"
+
+      match request.headers %% "content-length" with 
+      | Some content_length_string ->
+        let content_length = Convert.ToInt32(content_length_string)
+
+        match content_encoding with
+        | Some ce when ce.StartsWith("application/x-www-form-urlencoded") ->
+          let! raw_form, rem = get_raw_post_data connection content_length rem
+          return Some ({ request with raw_form = raw_form }, rem)
+        | Some ce when ce.StartsWith("multipart/form-data") ->
+          let boundary = "--" + ce.Substring(ce.IndexOf('=')+1).TrimStart()
+          let! r, rem = parse_multipart connection boundary request rem line_buffer
+          return Some (r, rem)
+        | Some _ | None ->
+          let! raw_form, rem = get_raw_post_data connection content_length rem
+          return Some ({ request with raw_form = raw_form }, rem)
+      | None ->  return Some (request, rem)
     else
-
-      if meth.Equals("POST") || meth.Equals("PUT") then
-
-        let content_encoding = request.headers %% "content-type"
-
-        match request.headers %% "content-length" with 
-        | Some content_length_string ->
-          let content_length = Convert.ToInt32(content_length_string)
-
-          match content_encoding with
-          | Some ce when ce.StartsWith("application/x-www-form-urlencoded") ->
-            let! raw_form, rem = get_raw_post_data connection content_length rem
-            return Some ({ request with raw_form = raw_form}, rem)
-          | Some ce when ce.StartsWith("multipart/form-data") ->
-            let boundary = "--" + ce.Substring(ce.IndexOf('=')+1).TrimStart()
-            let! r, rem = parse_multipart connection boundary request rem line_buffer
-            return Some (r, rem)
-          | Some _ | None ->
-            let! raw_form, rem = get_raw_post_data connection content_length rem
-            return Some ({ request with raw_form = raw_form}, rem)
-        | None ->  return Some (request, rem)
-      else return Some (request, rem)
+      return Some (request, rem)
   }
 
   open System.Net
@@ -320,57 +316,77 @@ module ParsingAndControl =
   type HttpProcessor = HttpRequest -> Connection -> BufferSegment option -> Async<(HttpRequest * (BufferSegment option)) option>
   type RequestResult = Done
 
-  let internal mk_request connection proto ipaddr : HttpRequest =
-    { http_version   = ""
-    ; url            = ""
-    ; ``method``     = ""
-    ; headers        = []
-    ; raw_form       = Array.empty
-    ; raw_query      = ""
-    ; files          = []
-    ; multipart_fields = []
-    ; is_secure      = match proto with HTTP -> false | HTTPS _ -> true
-    ; trace          = Log.TraceHeader.empty
-    ; ipaddr = ipaddr }
-  
-  let internal write_content_type connection (headers : (string*string) list) = socket {
-    if not(List.exists(fun (x : string,_) -> x.ToLower().Equals("content-type")) headers )then
-      do! async_writeln connection "Content-Type: text/html"
-  }
+  /// Here be dragons, read the source before using these functions.
+  module HttpWriters =
 
-  let internal write_headers connection (headers : (string*string) seq) = socket {
-    for (x,y) in headers do
-      if not (List.exists (fun y -> x.ToLower().Equals(y)) ["server";"date";"content-length"]) then
-        do! async_writeln connection (String.Concat [| x; ": "; y |])
-    }
-
-  open Types.Codes
-  open Globals
-  open Suave.Compression
-
-  let write_content context connection = function
-    | Bytes b -> socket {
-      let! (content : byte []) = Compression.transform b context connection
-      // http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.13
-      do! async_writeln connection (String.Concat [| "Content-Length: "; content.Length.ToString() |])
-      do! async_writeln connection ""
-      if content.Length > 0 then
-        do! connection.write (new ArraySegment<_>(content, 0, content.Length))
+    /// The prelude is the required initial output to serve a HTTP response.
+    let write_prelude connection status = socket {
+      let server_prelude =
+        String.concat
+          " "
+          [ "HTTP/1.1"
+          ; (Codes.http_code status).ToString(Culture.invariant)
+          ; Codes.http_reason status ]
+      do! async_writeln connection server_prelude
+      do! async_writeln connection Globals.Internals.server_header
+      do! async_writeln connection (String.Concat( [| "Date: "; Globals.utc_now().ToString("R") |]))
       }
-    | SocketTask f -> f connection
-    | NullContent -> failwith "TODO: unexpected NullContent value for 'write_content'"
 
+    /// These are the recommended headers to output when serving static content
+    let write_headers connection (headers : (string * string) seq) = socket {
+      let specials = ["server"; "date"; "content-length"]
+      for x, y in headers do
+        if not (List.exists (String.ord_ic_eq x) specials) then
+          do! async_writeln connection (String.Concat [| x; ": "; y |])
+      }
+
+    /// This function verifies that a 'Content-Type' header has been set and
+    /// if it hasn't, writes it out.
+    let write_content_type connection (headers : (string * string) list) = socket {
+      if not (List.exists (fst >> String.ord_ic_eq "content-type") headers) then
+        do! async_writeln connection "Content-Type: text/html"
+      }
+
+    open Suave.Compression
+
+    /// internal to enforce invariant that HttpResponse.before_write must be called
+    /// before writing contents to the stream
+    let write_content context connection = function
+      | Bytes b -> socket {
+        let! (content : byte []) = Compression.transform b context connection
+        // http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.13
+        do! async_writeln connection (String.Concat [| "Content-Length: "; Int32.to_s content.Length |])
+        do! async_writeln connection ""
+        if content.Length > 0 then
+          do! connection.write (new ArraySegment<_>(content, 0, content.Length))
+        }
+      | SocketTask f -> f connection
+      | NullContent  -> async.Return (Choice2Of2(OtherError "unexpected NullContent value for 'write_content'"))
+
+    /// Writes:
+    ///
+    /// - Compulsory prelude
+    /// - Recommended headers
+    /// - Content-Type header
+    ///
+    let write_standard connection status headers = socket {
+      do! write_prelude connection status
+      do! write_headers connection headers
+      do! write_content_type connection headers
+      }
+
+  open Types
+  open HttpWriters
+
+  /// This is the 'core' function for writing responses to the client.
   let response_f ({ response = r } as context : HttpContext) connection = socket {
-    do! async_writeln connection (String.concat " " [ "HTTP/1.1"
-                                                    ; (http_code r.status).ToString()
-                                                    ; http_reason r.status ])
-    do! async_writeln connection Internals.server_header
-    do! async_writeln connection (String.Concat( [| "Date: "; Globals.utc_now().ToString("R") |]))
-
-    do! write_headers connection r.headers
-    do! write_content_type connection r.headers
-
-    return! write_content context connection r.content
+    let! response_flow_control = r.before_write connection
+    match response_flow_control with
+    | FlowStandard ->
+      do! write_standard connection r.status r.headers
+      return! write_content context connection r.content
+    | FlowNonStandard ->
+      return! write_content context connection r.content
   }
 
   /// Check if the web part can perform its work on the current request. If it
@@ -378,10 +394,10 @@ module ParsingAndControl =
   let internal run ctx (web_part : WebPart) connection = 
     let execute _ = async {
       try  
-          let! q  = web_part ctx
-          return q
-        with ex ->
-          return! ctx.runtime.error_handler ex "request failed" ctx
+        let! q  = web_part ctx
+        return q
+      with ex ->
+        return! ctx.runtime.error_handler ex "request failed" ctx
     }
     socket {
       let! result = lift_async <| execute ()
@@ -389,23 +405,22 @@ module ParsingAndControl =
       | Some executed_part ->
         return! response_f executed_part connection
       | None -> return ()
-  }
+    }
 
   type HttpConsumer =
     | WebPart of WebPart
     | SocketPart of (HttpContext -> Async<(Connection -> SocketOp<unit>) option >)
 
-  let http_loop (proxy_mode : bool) (runtime : HttpRuntime) (consumer : HttpConsumer) (connection : Connection) =
+  let http_loop (runtime : HttpRuntime) (consumer : HttpConsumer) (connection : Connection) =
 
     let rec loop (bytes : BufferSegment list) = socket {
 
       let verbose  = Log.verbose runtime.logger "Suave.Web.request_loop.loop" Log.TraceHeader.empty
       let verbosef = Log.verbosef runtime.logger "Suave.Web.request_loop.loop" Log.TraceHeader.empty
 
-      verbose "-> processor"
-      let! result = process_request proxy_mode (match runtime.protocol with HTTP -> false | HTTPS _ -> true) bytes connection
-      verbose "<- processor"
+      let! result = process_request (match runtime.protocol with HTTP -> false | HTTPS _ -> true) bytes connection
 
+      // TODO: consider how much of incoming request to parse if we want to proxy it
       match result with
       | None -> verbose "'result = None', exiting"
       | Some (request : HttpRequest, rem) ->
@@ -448,23 +463,21 @@ module ParsingAndControl =
   /// a web part, an error handler and a Connection to use for read-write
   /// communication -- getting the initial request stream.
   let request_loop
-    (proxy_mode : bool)
     (runtime    : HttpRuntime)
     (consumer   : HttpConsumer)
     (connection : Connection) =
 
     socket {
       let! connection = load_connection runtime.logger runtime.protocol connection
-      do! http_loop proxy_mode runtime consumer connection
+      do! http_loop runtime consumer connection
       return ()
     }
 
   open Suave.Tcp
 
-
   /// Starts a new web worker, given the configuration and a web part to serve.
   let web_worker (ip, port, buffer_size, max_ops, runtime : HttpRuntime) (webpart : WebPart) =
-    tcp_ip_server (ip, port, buffer_size, max_ops) runtime.logger (request_loop false runtime (WebPart webpart))
+    tcp_ip_server (ip, port, buffer_size, max_ops) runtime.logger (request_loop runtime (WebPart webpart))
 
   let resolve_directory home_directory =
     match home_directory with
@@ -486,9 +499,9 @@ let default_error_handler (ex : Exception) msg (ctx : HttpContext) =
   let request = ctx.request
   msg |> Log.verbosee ctx.runtime.logger "Suave.Web.default_error_handler" ctx.request.trace ex
   if IPAddress.IsLoopback ctx.request.ipaddr then
-    Response.response Codes.HTTP_500 (UTF8.bytes (sprintf "<h1>%s</h1><br/>%A" ex.Message ex)) ctx
+    Response.response' Codes.HTTP_500 (UTF8.bytes (sprintf "<h1>%s</h1><br/>%A" ex.Message ex)) ctx
   else 
-    Response.response Codes.HTTP_500 (UTF8.bytes (Codes.http_message Codes.HTTP_500)) ctx
+    Response.response' Codes.HTTP_500 (UTF8.bytes (Codes.http_message Codes.HTTP_500)) ctx
 
 /// Returns the webserver as a tuple of 1) an async computation that yields unit when
 /// the web server is ready to serve quests, and 2) an async computation that yields

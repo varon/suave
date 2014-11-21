@@ -36,6 +36,37 @@ let (?<-) (target : IDictionary<string, 'a>) key value =
   target.[key] <- value
 
 [<RequireQualifiedAccess>]
+module Culture =
+
+  /// The invariant culture info
+  let invariant = System.Globalization.CultureInfo.InvariantCulture
+
+[<RequireQualifiedAccess>]
+module String =
+
+  /// Convert the string to lowercase with the invariant cultures
+  let inline lower (s : string) =
+    s.ToLower Culture.invariant
+
+  /// Use `string.Equals` with ordinal ignore case comparison
+  let inline ord_ic_eq (s : string) (s' : string) =
+    s.Equals(s', System.StringComparison.OrdinalIgnoreCase)
+
+[<RequireQualifiedAccess>]
+module Int32 =
+
+  /// Convert the int to a string using the InvariantCulture CultureInfo.
+  let inline to_s (i : int) =
+    i.ToString Culture.invariant
+
+[<RequireQualifiedAccess>]
+module Char =
+
+  /// Convert the char to a string using the InvariantCulture CultureInfo.
+  let inline to_s (c : char) =
+    c.ToString Culture.invariant
+
+[<RequireQualifiedAccess>]
 module UTF8 =
   open System
   open System.Text

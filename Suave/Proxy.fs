@@ -33,7 +33,9 @@ let private send_web_response (data : HttpWebResponse) ({ request = { trace = t 
   "-> read_fully" |> Log.verbose ctx.runtime.logger "Suave.Proxy.send_web_response:GetResponseStream" t
   let bytes = data.GetResponseStream() |> read_fully
   "<- read_fully" |> Log.verbose ctx.runtime.logger "Suave.Proxy.send_web_response:GetResponseStream" t
-  response (HttpCode.TryParse(int data.StatusCode) |> Option.get) bytes { ctx with response = { resp with headers = resp.headers @ headers } }
+  response' (HttpCode.TryParse(int data.StatusCode) |> Option.get)
+            bytes
+            { ctx with response = { resp with headers = resp.headers @ headers } }
 
 /// Forward the HttpRequest 'p' to the 'ip':'port'
 let forward (ip : IPAddress) (port : uint16) (ctx : HttpContext) =
@@ -90,7 +92,7 @@ let forward (ip : IPAddress) (port : uint16) (ctx : HttpContext) =
         do! response_f new_ctx cn
       | _ -> ()
     | :? WebException as ex when ex.Response = null ->
-      let! res = lift_async <|response HTTP_502 (UTF8.bytes "suave proxy: Could not connect to upstream") ctx
+      let! res = lift_async <| response' HTTP_502 (UTF8.bytes "suave proxy: Could not connect to upstream") ctx
       match res with
       | Some new_ctx ->
         do! response_f new_ctx cn
@@ -121,7 +123,7 @@ let proxy_server_async (config : SuaveConfig) resolver =
         tcp_ip_server
           (ip, port, config.buffer_size, config.max_ops)
           config.logger
-          (ParsingAndControl.request_loop true
+          (ParsingAndControl.request_loop
             (mk_runtime proto)
             (SocketPart (proxy resolver))))
   let listening = all |> Seq.map fst |> Async.Parallel |> Async.Ignore
