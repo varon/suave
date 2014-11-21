@@ -156,25 +156,57 @@ module OwinConstants =
 [<CompilationRepresentation (CompilationRepresentationFlags.ModuleSuffix)>]
 module OwinAppFunc =
 
-  let private wrap (ctx : HttpContext) : OwinEnvironment =
-    { new IDictionary<string, obj> with
-        member x.X () = () } // TODO
+  open Suave.Web.ParsingAndControl.HttpWriters
 
-  [<CompiledName ("ToSuave")>]
+  type OwinRequest =
+    abstract OnSendingHeadersAction : Action<Action<obj>, obj>
+
+  type DWr(initial_state) =
+    let mutable (state : HttpContext) = initial_state
+
+    member x.Interface =
+      x :> IDictionary<string, obj>
+
+    member x.State =
+      state
+
+    interface OwinRequest with
+      member x.OnSendingHeadersAction =
+        Action<_, _>(fun a -> fun x -> ())
+
+    interface IDictionary<string, obj> with
+      member x.Add (k, v) =
+        ()
+
+  let private wrap (ctx : HttpContext) =
+//    { new IDictionary<string, obj> with
+//        member x.X () = () } // TODO
+    DWr ctx
+
+  [<CompiledName "ToSuave">]
   let to_suave (owin : OwinApp) : WebPart =
     fun (ctx : HttpContext) ->
+      let on_sending_headers () =
+        ResponseFlow.FlowNonStandard
 
-      let impl conn : SocketOp<unit> = async {
-        do! owin (wrap ctx)
+      let impl conn : SocketOp<unit> = socket {
+        let wrapper = wrap ctx
+        do! lift_async (owin wrapper.Interface)
+
+        let r = wrapper.State.response
+        do! write_standard conn r.status r.headers
         // todo: on_sending_headers
         // todo: http serving
-        return Choice1Of2 ()
+        return ()
         }
 
       { ctx with
           response =
             { ctx.response with
                 content = SocketTask impl
+                before_write =
+                  fun conn ->
+                    async.Return (Choice1Of2 (on_sending_headers ()))
             }
       }
       |> succeed
@@ -183,6 +215,8 @@ module OwinAppFunc =
     to_suave (fun e -> Async.AwaitTask (owin.Invoke e))
 
 module OwinServerFactory =
+
+  type Dic<'Key, 'Value> = IDictionary<'Key, 'Value>
 
   let private read (d : OwinEnvironment) k f =
     match d.TryGetValue k with
@@ -215,18 +249,17 @@ module OwinServerFactory =
     | true, value -> map (value :?> 'a)
 
   [<CompiledName "Initialize">]
-  let initialize (props : OwinEnvironment) =
+  let initialize (props : Dic<string, obj>) =
     if props = null then nullArg "props"
-    props.[OwinConstants.owin_version] <- "1.1"
+    props.[OwinConstants.owin_version] <- "1.0.1"
     let cap = ``read_env!`` props OwinConstants.CommonKeys.capabilities
     cap.[OwinConstants.CommonKeys.server_name] <- Globals.Internals.server_name
 
   [<CompiledName ("Create")>]
-  let create (app : OwinAppFunc, props : OwinEnvironment) =
+  let create (app : OwinAppFunc, props : Dic<string, obj>) =
     if app = null then nullArg "app"
     if props = null then nullArg "props"
 
-    let cap = ``read_env!`` props OwinConstants.CommonKeys.capabilities
     let bindings =
       (``read_list!`` props OwinConstants.CommonKeys.addresses
        : IList<OwinEnvironment>)
@@ -237,21 +270,21 @@ module OwinServerFactory =
         { scheme = scheme; ip = IPAddress.Parse ip; port = uint16 port })
       |> List.ofSeq
 
-    let cts = new CancellationTokenSource()
+    let server_cts = new CancellationTokenSource()
 
     let conf =
       { Web.default_config with
           bindings = bindings
-          ct       = cts.Token }
+          ct       = server_cts.Token }
 
     let started, listening =
-      Web.web_server_async conf (OwinAppFunc.to_suave app)
+      Web.web_server_async conf (OwinAppFunc.to_suave' app)
 
     let _ = started |> Async.RunSynchronously
 
     { new IDisposable with
       member x.Dispose () =
         // note: this won't let the web requests finish gently
-        cts.Cancel()
-        cts.Dispose()
+        server_cts.Cancel()
+        server_cts.Dispose()
       }
