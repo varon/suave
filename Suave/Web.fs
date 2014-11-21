@@ -418,7 +418,7 @@ module ParsingAndControl =
       let verbose  = Log.verbose runtime.logger "Suave.Web.request_loop.loop" Log.TraceHeader.empty
       let verbosef = Log.verbosef runtime.logger "Suave.Web.request_loop.loop" Log.TraceHeader.empty
 
-      let! result = process_request (match runtime.protocol with HTTP -> false | HTTPS _ -> true) bytes connection
+      let! result = process_request runtime.is_https bytes connection
 
       // TODO: consider how much of incoming request to parse if we want to proxy it
       match result with

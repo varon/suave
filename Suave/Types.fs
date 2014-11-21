@@ -385,6 +385,10 @@ and HttpRuntime =
   ; compression_folder : string
   ; logger             : Log.Logger
   ; session_provider   : ISessionProvider }
+  member x.is_https =
+    match x.protocol with
+    | HTTP -> false
+    | _ -> true
 
 /// The HttpContext is the container of the request, runtime, user-state and
 /// response.
