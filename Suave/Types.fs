@@ -138,6 +138,8 @@ module HttpUpload =
   let temp_file_path x = x.temp_file_path
 
 /// A holder for the data extracted from the request.
+/// The data and paramters for an Http Request. 
+/// See : http://www.w3.org/Protocols/rfc2616/rfc2616-sec5.html
 type HttpRequest =
   { http_version     : string
     url              : string
@@ -156,6 +158,7 @@ module HttpRequest =
 
   open Suave.Utils
 
+  /// An empty HttpRequest. Valid, but containing only the most basic information.
   let empty =
     { http_version     = "1.1"
       url              = "/"
@@ -169,6 +172,17 @@ module HttpRequest =
       is_secure        = false
       ipaddr           = IPAddress.Loopback }
 
+  /// <summary>
+  /// Creates a new HttpRequest
+  /// </summary>
+  /// <param name="http_version">The HTTP version String Likely "1.1" </param>
+  /// <param name="url">the URL that was requested</param>
+  /// <param name="meth">the method requested</param>
+  /// <param name="headers">the headers of the request, if any</param>
+  /// <param name="raw_query">the query string passed to the server</param>
+  /// <param name="trace_headers">the headers used for </param>
+  /// <param name="is_secure">if the request is secure, i.e. over HTTPS</param>
+  /// <param name="ip_addr">the address the request originated from</param>
   let mk http_version url meth headers raw_query trace_headers is_secure ip_addr =
     { http_version     = http_version
       url              = url
