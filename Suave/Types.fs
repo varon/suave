@@ -86,7 +86,8 @@ module HttpCookie =
     if x.secure    then app "Secure"
     sb.ToString ()
 
-/// A file's mime type and if compression is enabled or not
+/// The internet Nedia Type. see https://en.wikipedia.org/wiki/Internet_media_type
+/// This is normally used as an identifier for the type of the file provided by the server.
 type MimeType =
   { name         : string
     compression  : bool }
@@ -94,13 +95,18 @@ type MimeType =
 [<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
 module MimeType =
 
+  /// <summary>
+  /// Creates a MimeType with the name and compression information provided.
+  /// </summary>
+  /// <param name="name">the name to use</param>
+  /// <param name="compression">whether or not this is compressed</param>
   let mk name compression =
     { name        = name
       compression = compression }
 
 type MimeTypesMap = string -> MimeType option
 
-/// A holder for uploaded file meta-data
+/// The metadata associated with an uploaded file.
 type HttpUpload =
   { field_name     : string
     file_name      : string
@@ -110,6 +116,13 @@ type HttpUpload =
 [<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
 module HttpUpload =
 
+  /// <summary>
+  /// Creates an HttpUpload.
+  /// </summary>
+  /// <param name="field_name">the field name that the file was uploaded to</param>
+  /// <param name="file_name">the name of the uploaded file</param>
+  /// <param name="mime_type">the mime type of the file uploaded</param>
+  /// <param name="temp_file_path">the path the file was uploaded to</param>
   let mk field_name file_name mime_type temp_file_path =
     { field_name     = field_name
       file_name      = file_name
